@@ -1,0 +1,59 @@
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
+import io.netty.handler.stream.ChunkedWriteHandler;
+
+/**
+ * @author lihb
+ */
+public class WebSocketServer {
+
+    private void run(int port) throws Exception {
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            ServerBootstrap bootstrap = new ServerBootstrap();
+            bootstrap.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class).childHandler(new ChannelInitializer<SocketChannel>() {
+
+                // channel注册完成后，进入该方法，对channel进行初始化操作
+                @Override
+                protected void initChannel(SocketChannel ch) throws Exception {
+                    System.out.println("server init channel... local addr:" + ch.localAddress() + " remote addr:" + ch.remoteAddress());
+                    ChannelPipeline pipeline = ch.pipeline();
+                    // 将请求和应答编解码为http消息
+                    pipeline.addLast("http-codec", new HttpServerCodec());
+                    // 将http消息的多个部分组合成一条完整的http消息
+                    pipeline.addLast("aggregator", new HttpObjectAggregator(65536));
+                    // 支持异步写入大数据流
+                    pipeline.addLast("http-chunked", new ChunkedWriteHandler());
+                    // 处理websocket Handshake|Close|Ping|Pong
+//                    pipeline.addLast("ws-handler", new WebSocketServerProtocolHandler("/websocket", null, true, 65535));
+                    pipeline.addLast("s-handler", new WebSocketServerHandler());
+                }
+            });
+
+            Channel channel = bootstrap.bind(port).sync().channel();
+            System.out.println("Web socket server started at port " + port);
+            System.out.println("Open your browser and navigate to http://localhost:" + port + '/');
+
+            channel.closeFuture().sync();
+            System.out.println("server channel close...:" + channel.localAddress());
+        } finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        int port = 8080;
+        new WebSocketServer().run(port);
+    }
+}
