@@ -1,0 +1,97 @@
+import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpClientCodec;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.stream.ChunkedWriteHandler;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.net.URI;
+
+/**
+ * @author lihb
+ */
+public class WebSocketClient {
+
+    private static final String WEBSOCKET_ADDR = "ws://localhost:8080/";
+
+    public static void main(String[] args) throws Exception {
+        EventLoopGroup group = new NioEventLoopGroup();
+        try {
+            Bootstrap bootstrap = new Bootstrap();
+            bootstrap.group(group)
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .handler(new ChannelInitializer<SocketChannel>() {
+
+                    @Override
+                    public void initChannel(SocketChannel ch) throws Exception {
+                        System.out.println("client init channel... local addr:" + ch.localAddress() + " remote addr:" + ch.remoteAddress());
+                        ChannelPipeline pipeline = ch.pipeline();
+                        pipeline.addLast("http-codec", new HttpClientCodec());
+                        pipeline.addLast("aggregator", new HttpObjectAggregator(65536));
+                        pipeline.addLast("http-chunked", new ChunkedWriteHandler());
+                        pipeline.addLast("c-handler", new WebSocketClientHandler());
+                    }
+                });
+
+            HttpHeaders httpHeaders = new DefaultHttpHeaders();
+            WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(new URI
+                    (WEBSOCKET_ADDR),
+                WebSocketVersion.V13, null, false, httpHeaders);
+
+            // 连接服务器
+            Channel channel = bootstrap.connect("localhost", 8080).sync().channel();
+            WebSocketClientHandler handler = (WebSocketClientHandler) channel.pipeline().get("c-handler");
+            // 在handler里处理握手协议的返回
+            handler.setHandshaker(handshaker);
+            // 发起握手
+            handshaker.handshake(channel);
+
+            // 同步等待握手结果
+            handler.getHandshakeFuture().sync();
+
+            Thread textThread = new Thread(() -> {
+                TextWebSocketFrame textFrame = new TextWebSocketFrame("文本消息测试");
+                channel.writeAndFlush(textFrame).addListener((ChannelFutureListener) future -> {
+                    if (future.isSuccess()) {
+                        System.out.println("text send success.");
+                    } else {
+                        System.out.println("text send failed." + future.cause().getMessage());
+                    }
+                });
+            });
+
+            Thread biThread = new Thread(() -> {
+                ByteBuf buf = Unpooled.buffer(4);
+                buf.writeBytes("二进制消息测试".getBytes());
+                BinaryWebSocketFrame biFrame = new BinaryWebSocketFrame(buf);
+                channel.writeAndFlush(biFrame).addListener((ChannelFutureListener) future -> {
+                    if (future.isSuccess()) {
+                        System.out.println("binary send success.");
+                    } else {
+                        System.out.println("binary send failed." + future.cause().getMessage());
+                    }
+                });
+            });
+
+            // 握手成功，分别发送文本内容和二进制内容
+            if (handler.getHandshakeFuture().isSuccess()) {
+                textThread.start();
+                biThread.start();
+            }
+
+            channel.closeFuture().sync();
+        } finally {
+            group.shutdownGracefully();
+        }
+    }
+}
