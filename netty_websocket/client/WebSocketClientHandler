@@ -1,0 +1,118 @@
+import io.netty.channel.*;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.util.CharsetUtil;
+
+/**
+ * @author lihb
+ */
+public class WebSocketClientHandler extends SimpleChannelInboundHandler<Object> {
+
+    private WebSocketClientHandshaker handshaker;
+    private ChannelPromise handshakeFuture;
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client channel active. local addr:" + ctx.channel().localAddress() + " remote addr:" +
+            ctx.channel().remoteAddress());
+        super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client channel inactive. local addr:" + ctx.channel().localAddress() + " remote addr:" +
+            ctx.channel().remoteAddress());
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("client read. local addr:" + ctx.channel().localAddress() + " remote addr:" + ctx.channel
+            ().remoteAddress());
+        super.channelRead(ctx, msg);
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client read complete. local addr:" + ctx.channel().localAddress() + " remote addr:" + ctx
+            .channel().remoteAddress());
+        super.channelReadComplete(ctx);
+    }
+
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client channel registered. local addr:" + ctx.channel().localAddress() + " remote addr:"
+            + ctx.channel().remoteAddress());
+        super.channelRegistered(ctx);
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client channel unregistered. local addr:" + ctx.channel().localAddress() + " remote " +
+            "addr:" + ctx.channel().remoteAddress());
+        super.channelUnregistered(ctx);
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        this.handshakeFuture = ctx.newPromise();
+    }
+
+    public WebSocketClientHandshaker getHandshaker() {
+        return handshaker;
+    }
+
+    public void setHandshaker(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
+    }
+
+    public ChannelPromise getHandshakeFuture() {
+        return handshakeFuture;
+    }
+
+    public void setHandshakeFuture(ChannelPromise handshakeFuture) {
+        this.handshakeFuture = handshakeFuture;
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        Channel channel = ctx.channel();
+        FullHttpResponse response;
+
+        if (!this.handshaker.isHandshakeComplete()) {
+            try {
+                response = (FullHttpResponse) msg;
+                // 握手协议返回，设置握手结束
+                this.handshaker.finishHandshake(channel, response);
+                // 设置握手成功，并通知所有监听器
+                this.handshakeFuture.setSuccess();
+                System.out.println("websocket client connected. response headers:" + response.headers().toString());
+            } catch (WebSocketHandshakeException ex) {
+                FullHttpResponse res = (FullHttpResponse) msg;
+                String errorMsg = String.format("websocket client failed to connect, status:%s, reason:%s", res
+                    .status(), res.content().toString(CharsetUtil.UTF_8));
+                // 设置握手失败，并通知所有监听器
+                this.handshakeFuture.setFailure(new Exception(errorMsg));
+                System.out.println("websocket client failed. reason:" + res.content().toString(CharsetUtil.UTF_8));
+            }
+        } else if (msg instanceof FullHttpResponse) {
+            response = (FullHttpResponse) msg;
+            throw new IllegalStateException("unexpected FullHttpResponse, status=" + response.status() + ", content="
+                + response.content().toString(CharsetUtil.UTF_8));
+        } else {
+            WebSocketFrame frame = (WebSocketFrame) msg;
+            if (frame instanceof TextWebSocketFrame) {
+                TextWebSocketFrame textFrame = (TextWebSocketFrame) frame;
+                System.out.println(String.format("%s received %s from %s", ctx.channel().localAddress(), textFrame
+                    .text(), ctx.channel().remoteAddress()));
+            } else if (frame instanceof BinaryWebSocketFrame) {
+                BinaryWebSocketFrame biFrame = (BinaryWebSocketFrame) frame;
+                System.out.println(String.format("%s received %s from %s", ctx.channel().localAddress(), biFrame
+                    .content().toString(CharsetUtil.UTF_8), ctx.channel().remoteAddress()));
+            } else if (frame instanceof CloseWebSocketFrame) {
+                System.out.println("receive close frame.");
+                channel.close();
+            }
+        }
+    }
+}
