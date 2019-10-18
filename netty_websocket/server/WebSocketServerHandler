@@ -1,0 +1,156 @@
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.util.CharsetUtil;
+
+/**
+ * @author lihb
+ */
+public class WebSocketServerHandler extends SimpleChannelInboundHandler<Object> {
+
+    private WebSocketServerHandshaker handshaker;
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server channel active. local addr:" + ctx.channel().localAddress() + " remote addr:" +
+            ctx.channel().remoteAddress());
+        super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server channel inactive. local addr:" + ctx.channel().localAddress() + " remote addr:" +
+            ctx.channel().remoteAddress());
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server channel registered. local addr:" + ctx.channel().localAddress() + " remote addr:"
+            + ctx.channel().remoteAddress());
+        super.channelRegistered(ctx);
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server channel unregistered. local addr:" + ctx.channel().localAddress() + " remote " +
+            "addr:" + ctx.channel().remoteAddress());
+        super.channelUnregistered(ctx);
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("server channel read. local addr:" + ctx.channel().localAddress() + " remote addr:" + ctx
+            .channel().remoteAddress());
+        super.channelRead(ctx, msg);
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("server channel read0.");
+        if (msg instanceof FullHttpRequest) {
+            handleHttpRequest(ctx, (FullHttpRequest) msg);
+        } else if (msg instanceof WebSocketFrame) {
+            handleWebSocketFrame(ctx, (WebSocketFrame) msg);
+        }
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server channel read complete.");
+        ctx.flush();  // channelRead处理完之后，调用一次flush
+        super.channelReadComplete(ctx);
+    }
+
+    /**
+     * 处理handshake，可以直接交给WebSocketServerProtocolHandler处理
+     *
+     * @param ctx
+     * @param req
+     * @throws Exception
+     */
+    @Deprecated
+    private void handleHttpRequest(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
+        if (!req.decoderResult().isSuccess() || (!"websocket".equals(req.headers().get("Upgrade")))) {
+            sendHttpResponse(ctx, req, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus
+                .BAD_REQUEST));
+            return;
+        }
+        // 构造握手响应返回，本机测试
+        WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory
+            ("ws://localhost:8080/websocket", null, false);
+        handshaker = wsFactory.newHandshaker(req);
+        if (handshaker == null) {
+            WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ctx.channel());
+        } else {
+            // 返回握手响应
+            handshaker.handshake(ctx.channel(), req);
+        }
+    }
+
+    @Deprecated
+    private static void sendHttpResponse(ChannelHandlerContext ctx, FullHttpRequest req, FullHttpResponse res) {
+        // 返回应答给客户端
+        if (res.status().code() != 200) {
+            ByteBuf buf = Unpooled.copiedBuffer(res.status().toString(), CharsetUtil.UTF_8);
+            res.content().writeBytes(buf);
+            buf.release();
+            HttpUtil.setContentLength(res, res.content().readableBytes());
+        }
+
+        // 如果是非keep-alive，关闭连接
+        ChannelFuture future = ctx.channel().writeAndFlush(res);
+        System.out.println(HttpUtil.isKeepAlive(req));
+        if (!HttpUtil.isKeepAlive(req) || res.status().code() != 200) {
+            future.addListener(ChannelFutureListener.CLOSE);
+        }
+    }
+
+    private void handleWebSocketFrame(ChannelHandlerContext ctx, WebSocketFrame frame) {
+        // 实际上这些websocket帧会被WebSocketServerProtocolHandler处理返回
+        if (frame instanceof CloseWebSocketFrame) {
+            if (handshaker != null) {
+                frame.retain();
+                handshaker.close(ctx.channel(), (CloseWebSocketFrame) frame);
+            } else {
+                ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
+            }
+            return;
+        }
+        if (frame instanceof PingWebSocketFrame) {
+            frame.content().retain();
+            ctx.channel().writeAndFlush(new PongWebSocketFrame(frame.content()));
+            return;
+        }
+        if (frame instanceof PongWebSocketFrame) {
+            // Pong frames need to get ignored
+            return;
+        }
+
+        // 真正处理的消息
+        if (frame instanceof TextWebSocketFrame) {
+            String request = ((TextWebSocketFrame) frame).text();
+            System.out.println(String.format("%s received %s from %s", ctx.channel().localAddress(), request, ctx
+                .channel().remoteAddress()));
+            ctx.channel().writeAndFlush(new TextWebSocketFrame("文本消息回复"));
+        } else if (frame instanceof BinaryWebSocketFrame) {
+            String request = frame.content().toString(CharsetUtil.UTF_8);
+            System.out.println(String.format("%s received %s from %s", ctx.channel().localAddress(), request, ctx
+                .channel().remoteAddress()));
+            BinaryWebSocketFrame biFrame = new BinaryWebSocketFrame(Unpooled.buffer().writeBytes("二进制消息回复".getBytes()));
+            ctx.channel().writeAndFlush(biFrame);
+        }
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        System.out.println("exception caught: " + cause.getMessage());
+        ctx.close();
+        super.exceptionCaught(ctx, cause);
+    }
+}
