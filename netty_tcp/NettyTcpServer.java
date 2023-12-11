@@ -1,4 +1,4 @@
-package test.lihb.netty.tcp.server;
+package test.netty.tcp.server;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
